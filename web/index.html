@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Liquid Glass UI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --accent: #7c4dff;
+    --accent-light: #b388ff;
+    --ink: #211633;
+    --ink-soft: rgba(33, 22, 51, .66);
+    --shade: 43, 48, 69;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    background: #b7a2e6;
+    color: var(--ink);
+    font-family: "Gowun Dodum", system-ui, -apple-system, "Apple SD Gothic Neo", sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    overflow-x: hidden;
+  }
+  /* The glass is painted by one WebGL canvas behind the page; elements stay transparent. */
+  #gl, #bg { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 0; display: block; }
+  #bg { display: none; }
+  .no-gl #bg { display: block; }
+
+  #app {
+    position: relative; z-index: 1;
+    max-width: 440px; margin: 0 auto;
+    padding: 28px 16px 120px;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  header.top { padding: 18px 6px 4px; color: #fff; text-shadow: 0 1px 10px rgba(var(--shade), .25); }
+  header.top h1 { margin: 0; font-size: 34px; letter-spacing: -.5px; }
+  header.top p { margin: 6px 0 0; font-size: 15px; opacity: .92; }
+
+  h2, h3, .label, .btn { text-shadow: .5px .2px .35px; } /* ~30% of a bold, no synthetic bold */
+  h2 { margin: 0 0 6px; font-size: 22px; font-weight: 400; }
+  h3 { margin: 0; font-size: 17px; font-weight: 400; }
+  p { margin: 0; line-height: 1.5; }
+  .muted { color: var(--ink-soft); font-size: 14px; }
+
+  /* Every glass element: transparent body, outside-only soft shadow, a 1px top-bright rim. */
+  [data-glass] { position: relative; background: transparent; }
+  [data-glass]::before {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px; pointer-events: none;
+    background: linear-gradient(180deg, rgba(255,255,255,.9), rgba(255,255,255,.25) 55%, rgba(var(--shade), .12));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+  }
+  [data-glass="track"]::before { display: none; }
+
+  .card { border-radius: 24px; padding: 20px; box-shadow: 0 14px 30px -14px rgba(var(--shade), .35); }
+  .card > * + * { margin-top: 14px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .between { justify-content: space-between; flex-wrap: nowrap; }
+
+  /* Liquid glass pill button. */
+  .btn {
+    appearance: none; border: 0; font: inherit; cursor: pointer;
+    height: 48px; padding: 0 22px; border-radius: 999px;
+    font-size: 17px; color: var(--ink);
+    box-shadow: 0 10px 14px -8px rgba(var(--shade), .30);
+    transform: scale(calc(1 + .035 * var(--p, 0)), calc(1 - .06 * var(--p, 0)));
+    touch-action: manipulation;
+  }
+  .btn.primary { color: var(--accent); box-shadow: 0 10px 16px -8px color-mix(in srgb, var(--accent) 45%, transparent); }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .btn::after { /* light pooling under the finger */
+    content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    background: radial-gradient(circle at var(--x, 50%) var(--y, 50%), rgba(255,255,255,.45), transparent 65%);
+    opacity: var(--p, 0);
+  }
+  .btn.round { width: 44px; height: 44px; padding: 0; font-size: 22px; }
+  .btn.small { height: 36px; padding: 0 16px; font-size: 15px; }
+  .btn:focus-visible, .switch:focus-visible, .slider:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+  /* Switch: a coloured track and a liquid-glass knob that lenses it. */
+  .switch { appearance: none; border: 0; background: none; padding: 0; cursor: pointer; position: relative; width: 60px; height: 36px; flex: none; }
+  .switch .track { position: absolute; left: 8px; right: 8px; top: 6px; height: 24px; border-radius: 12px; }
+  .switch .knob, .slider .knob { position: absolute; border-radius: 999px; box-shadow: 0 6px 12px -4px rgba(var(--shade), .35); pointer-events: none; }
+  .switch .knob { left: 0; top: 3px; width: 30px; height: 30px; }
+
+  /* Slider. */
+  .slider { position: relative; height: 44px; touch-action: none; cursor: pointer; }
+  .slider .track { position: absolute; left: 4px; right: 4px; top: 15px; height: 14px; border-radius: 7px; }
+  .slider .knob { top: 8px; width: 28px; height: 28px; }
+
+  .value { min-width: 44px; text-align: center; font-size: 20px; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .type-scale > * + * { margin-top: 6px; }
+
+  nav.tabbar {
+    position: fixed; z-index: 2; left: 50%; bottom: 18px; transform: translateX(-50%);
+    width: min(408px, calc(100vw - 32px)); height: 64px; border-radius: 32px;
+    display: flex; justify-content: space-around; align-items: center;
+    box-shadow: 0 14px 30px -12px rgba(var(--shade), .35), inset 0 1px 0 rgba(255,255,255,.9);
+    /* It floats over scrolling DOM content, which the WebGL backdrop can't see — so this one
+       frosts with the browser's own backdrop blur. */
+    background: rgba(255,255,255,.55);
+    backdrop-filter: blur(22px) saturate(1.2); -webkit-backdrop-filter: blur(22px) saturate(1.2);
+  }
+  nav.tabbar button { appearance: none; border: 0; background: none; font: inherit; color: var(--ink-soft); font-size: 14px; padding: 8px 14px; cursor: pointer; }
+  nav.tabbar button[aria-selected="true"] { color: var(--accent); text-shadow: .5px .2px .35px; }
+
+  /* No WebGL2: the same layout on the browser's own backdrop blur. */
+  .no-gl [data-glass="button"], .no-gl [data-glass="card"], .no-gl [data-glass="knob"] { background: rgba(255,255,255,.14); backdrop-filter: blur(3px) saturate(1.3); -webkit-backdrop-filter: blur(3px) saturate(1.3); }
+  .no-gl [data-glass="frost"] { background: rgba(255,255,255,.55); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); }
+  .no-gl [data-glass="track"] { background: rgba(var(--shade), .16); }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<canvas id="bg"></canvas>
+
+<main id="app">
+  <header class="top">
+    <h1>Liquid Glass</h1>
+    <p>The glass UI from the Dynamic Ring app, ported to the web</p>
+  </header>
+
+  <section class="card" data-glass="card">
+    <h2>Liquid Glass Card</h2>
+    <p class="muted">The background bends only at the edges; the middle stays almost transparent. Try pressing a button.</p>
+    <div class="row">
+      <button class="btn primary" data-glass="button">Get Started</button>
+      <button class="btn" data-glass="button">Later</button>
+      <button class="btn" data-glass="button" disabled>Disabled</button>
+    </div>
+  </section>
+
+  <section class="card" data-glass="card">
+    <h2>Controls</h2>
+    <div class="row between">
+      <span class="label">Notifications</span>
+      <button class="switch" role="switch" aria-checked="true" aria-label="Notifications"><span class="track" data-glass="track"></span><span class="knob" data-glass="knob"></span></button>
+    </div>
+    <div class="row between">
+      <span class="label">Vibration</span>
+      <button class="switch" role="switch" aria-checked="false" aria-label="Vibration"><span class="track" data-glass="track"></span><span class="knob" data-glass="knob"></span></button>
+    </div>
+    <div>
+      <div class="row between"><span class="label">Brightness</span><span class="muted" id="sliderOut">40%</span></div>
+      <div class="slider" role="slider" tabindex="0" aria-label="Brightness" aria-valuemin="0" aria-valuemax="100" aria-valuenow="40" data-value="40">
+        <div class="track" data-glass="track"></div><div class="knob" data-glass="knob"></div>
+      </div>
+    </div>
+    <div class="row between">
+      <span class="label">Ring Size</span>
+      <div class="row">
+        <button class="btn round" data-glass="button" data-step="-1" aria-label="Decrease">−</button>
+        <span class="value" id="stepOut">3</span>
+        <button class="btn round" data-glass="button" data-step="1" aria-label="Increase">+</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" data-glass="frost">
+    <h2>Frosted Glass Card</h2>
+    <p class="muted">No refraction — just a heavy blur behind it, a milky wash, and fine grain. Used on surfaces, not controls.</p>
+    <h3>Theme</h3>
+    <div class="chips" id="themes">
+      <button class="btn small primary" data-glass="button" data-theme="lilac">Blueberry</button>
+      <button class="btn small" data-glass="button" data-theme="honey">Cheesecake</button>
+      <button class="btn small" data-glass="button" data-theme="silver">Clear</button>
+    </div>
+    <div class="type-scale">
+      <h3>Text</h3>
+      <div style="font-size:28px" class="label">Headline 28</div>
+      <div style="font-size:20px" class="label">Title 20</div>
+      <p>Body 16 — a single-weight font gets a hairline shadow in its own color, reading as roughly 30% of a bold.</p>
+      <p class="muted" style="font-size:13px">Caption 13 — secondary text</p>
+    </div>
+  </section>
+</main>
+
+<nav class="tabbar" role="tablist">
+  <button role="tab" aria-selected="true">Home</button>
+  <button role="tab" aria-selected="false">Customize</button>
+  <button role="tab" aria-selected="false">Settings</button>
+</nav>
+
+<script>
+"use strict";
+
+/* ---------- Themes: the app's three dawn landscapes + accents ---------- */
+const THEMES = {
+  lilac: { accent: "#7c4dff", accentLight: "#b388ff", ink: "#211633", ringA: "#ceb2ff", ringB: "#7fc7ff",
+    skyTop: "#7a68c4", skyMid: "#b7a2e6", horizon: "#f6cfe0", glow: "#fff2f2", mtnDark: "#5b4a9e", mtnLit: "#a48adb", rim: "#ffdde8",
+    ground: "#8c76cf", groundDeep: "#55448f", river: "#fbe6f0", riverDeep: "#b59de4", mist: "#f7eeff" },
+  honey: { accent: "#e08a1e", accentLight: "#ffcb6b", ink: "#4a2b00", ringA: "#ffe095", ringB: "#fff6d8",
+    skyTop: "#b98a6e", skyMid: "#e9b98a", horizon: "#ffddb0", glow: "#fff4dc", mtnDark: "#a67c68", mtnLit: "#ebbe8a", rim: "#ffe7b8",
+    ground: "#c79572", groundDeep: "#8e6450", river: "#ffebc6", riverDeep: "#d9a982", mist: "#fff0d8" },
+  silver: { accent: "#4f5868", accentLight: "#b9c0cc", ink: "#1e2330", ringA: "#c3cce0", ringB: "#8e9ab6",
+    skyTop: "#7f8aa8", skyMid: "#b8bfd4", horizon: "#ebe2ea", glow: "#ffffff", mtnDark: "#65708e", mtnLit: "#adb6cc", rim: "#f4f1f6",
+    ground: "#8f98b2", groundDeep: "#5e6884", river: "#f2f0f6", riverDeep: "#b4bcd0", mist: "#f4f4fa" },
+};
+let theme = THEMES.lilac;
+
+const hex = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+const mixc = (a, b, t) => { const A = hex(a), B = hex(b); return "#" + A.map((v, i) => Math.round(v + (B[i] - v) * t).toString(16).padStart(2, "0")).join(""); };
+const rgba = (h, a) => { const [r, g, b] = hex(h); return `rgba(${r},${g},${b},${a})`; };
+
+/* ---------- The background: the app's dawn landscape (Landscape.kt), drawn once ---------- */
+const MOUNTAINS = [
+  { ridge: [[0.10,0.75],[0.24,0.48],[0.32,0.42],[0.40,0.33],[0.46,0.295],[0.50,0.27],[0.56,0.31],[0.60,0.335],[0.66,0.37],[0.72,0.42],[0.80,0.52],[0.92,0.75]], summit: 5, fog: 0.60, haze: 0.35 },
+  { ridge: [[-0.20,0.75],[-0.02,0.50],[0.06,0.42],[0.11,0.375],[0.16,0.355],[0.21,0.40],[0.25,0.43],[0.30,0.48],[0.37,0.56],[0.46,0.75]], summit: 4, fog: 0.63, haze: 0.15 },
+  { ridge: [[0.34,0.75],[0.44,0.56],[0.52,0.47],[0.58,0.43],[0.65,0.39],[0.69,0.415],[0.73,0.45],[0.79,0.525],[0.85,0.585],[0.95,0.75]], summit: 4, fog: 0.66, haze: 0 },
+];
+const CLOUDS = [[0.14,0.52,0.36],[0.18,0.62,0.30],[0.24,0.08,0.26],[0.41,0.60,0.40],[0.44,0.70,0.24]];
+const STARS = [[0.12,0.04],[0.31,0.08],[0.47,0.03],[0.63,0.07],[0.82,0.05],[0.22,0.13],[0.72,0.12],[0.92,0.15],[0.06,0.18],[0.40,0.16]];
+
+function drawDawn(ctx, w, h, c) {
+  const horizon = h * 0.56, u = Math.min(w, h * 0.46);
+  const sx = w * 0.86, sy = h * 0.535, sunR = u * 0.075;
+  const lin = (x0, y0, x1, y1, stops) => { const g = ctx.createLinearGradient(x0, y0, x1, y1); stops.forEach(([o, col]) => g.addColorStop(o, col)); return g; };
+  const rad = (x, y, r, stops) => { const g = ctx.createRadialGradient(x, y, 0, x, y, r); stops.forEach(([o, col]) => g.addColorStop(o, col)); return g; };
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, h);
+  // Dawn sky: cool and deep overhead, rose then a pale glow at the horizon.
+  ctx.fillStyle = lin(0, 0, 0, horizon, [[0, c.skyTop], [0.5, c.skyMid], [0.85, c.horizon], [1, c.glow]]);
+  ctx.fillRect(0, 0, w, horizon + 2);
+  ctx.fillStyle = "#fff";
+  for (const [fx, fy] of STARS) { ctx.globalAlpha = Math.max(0, Math.min(1, 0.75 - fy * 2.4)); ctx.beginPath(); ctx.arc(w * fx, h * fy, h * 0.0016, 0, 7); ctx.fill(); }
+  ctx.globalAlpha = 1;
+  // The ring-sun's light spread along the horizon.
+  ctx.save(); ctx.translate(sx, sy); ctx.scale(1, 0.32);
+  ctx.fillStyle = rad(0, 0, w * 0.8, [[0, rgba(c.glow, 0.95)], [1, rgba(c.horizon, 0)]]);
+  ctx.beginPath(); ctx.arc(0, 0, w * 0.8, 0, 7); ctx.fill(); ctx.restore();
+  // Cloud streaks lit from below.
+  ctx.lineCap = "round"; ctx.lineWidth = h * 0.006; ctx.globalAlpha = 0.75;
+  for (const [fy, fx, fl] of CLOUDS) {
+    ctx.strokeStyle = lin(w * fx, 0, w * (fx + fl), 0, [[0, rgba(c.rim, 0)], [0.5, c.rim], [1, c.glow]]);
+    ctx.beginPath(); ctx.moveTo(w * fx, h * fy); ctx.lineTo(w * (fx + fl), h * fy); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  // The Dynamic Ring as the sun.
+  ctx.fillStyle = rad(sx, sy, sunR * 3.2, [[0, c.glow], [1, rgba(c.glow, 0)]]);
+  ctx.beginPath(); ctx.arc(sx, sy, sunR * 3.2, 0, 7); ctx.fill();
+  if (ctx.createConicGradient) {
+    const g = ctx.createConicGradient(0, sx, sy);
+    [[0, c.ringA], [0.33, c.ringB], [0.66, c.glow], [1, c.ringA]].forEach(([o, col]) => g.addColorStop(o, col));
+    ctx.strokeStyle = g;
+  } else ctx.strokeStyle = c.ringA;
+  ctx.lineWidth = sunR * 0.36; ctx.beginPath(); ctx.arc(sx, sy, sunR, 0, 7); ctx.stroke();
+  ctx.globalAlpha = 0.8; ctx.strokeStyle = c.glow; ctx.lineWidth = sunR * 0.06; ctx.beginPath(); ctx.arc(sx, sy, sunR * 0.82, 0, 7); ctx.stroke();
+  ctx.globalAlpha = 0.6; ctx.strokeStyle = "#fff"; ctx.lineWidth = sunR * 0.05; ctx.beginPath(); ctx.arc(sx, sy, sunR * 1.17, 0, 7); ctx.stroke();
+  ctx.globalAlpha = 1;
+  // Valley floor.
+  ctx.fillStyle = lin(0, horizon, 0, h, [[0, c.horizon], [0.25, c.ground], [1, c.groundDeep]]);
+  ctx.fillRect(0, horizon, w, h - horizon);
+  // Three big mountains: shaded left, lit right face, warm rim on the sunward ridge.
+  for (const m of MOUNTAINS) {
+    const dark = mixc(c.mtnDark, c.skyMid, m.haze), lit = mixc(c.mtnLit, c.horizon, m.haze);
+    const pts = m.ridge.map(([x, y]) => [w * x, h * y]), [tx, ty] = pts[m.summit], fogY = h * m.fog, last = pts[pts.length - 1];
+    ctx.fillStyle = lin(0, ty, 0, fogY, [[0, dark], [1, mixc(dark, c.mist, 0.75)]]);
+    ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = lin(0, ty, 0, fogY, [[0, lit], [1, rgba(mixc(lit, c.mist, 0.6), 0.5)]]);
+    ctx.beginPath(); ctx.moveTo(tx, ty); pts.slice(m.summit + 1).forEach(([x, y]) => ctx.lineTo(x, y));
+    ctx.lineTo(tx + w * 0.05, last[1]); ctx.lineTo(tx + w * 0.035, ty + (fogY - ty) * 0.45); ctx.lineTo(tx + w * 0.012, ty + (fogY - ty) * 0.18); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = lin(0, ty, 0, fogY, [[0, c.rim], [1, rgba(c.rim, 0)]]); ctx.lineWidth = h * 0.0028; ctx.lineJoin = "round";
+    ctx.beginPath(); ctx.moveTo(tx, ty); pts.slice(m.summit + 1).forEach(([x, y]) => ctx.lineTo(x, y)); ctx.stroke();
+  }
+  // The plain in front, its top lost in mist.
+  const pt = h * 0.60;
+  ctx.fillStyle = lin(0, pt, 0, h, [[0, rgba(c.mist, 0)], [0.07, rgba(c.mist, 0.85)], [0.16, mixc(c.mist, c.ground, 0.45)], [0.32, c.ground], [1, c.groundDeep]]);
+  ctx.fillRect(0, pt, w, h - pt);
+  // The river toward the viewer, the ring's glow on it.
+  const rt = h * 0.63;
+  ctx.fillStyle = lin(0, rt, 0, h, [[0, c.glow], [0.5, c.river], [1, c.riverDeep]]);
+  ctx.beginPath(); ctx.moveTo(w * 0.52, rt); ctx.lineTo(w * 0.58, rt);
+  ctx.bezierCurveTo(w * 0.70, h * 0.72, w * 0.46, h * 0.78, w * 0.64, h * 0.86);
+  ctx.bezierCurveTo(w * 0.80, h * 0.93, w * 0.78, h * 0.97, w * 0.80, h);
+  ctx.lineTo(w * 0.18, h);
+  ctx.bezierCurveTo(w * 0.24, h * 0.92, w * 0.30, h * 0.87, w * 0.42, h * 0.82);
+  ctx.bezierCurveTo(w * 0.56, h * 0.76, w * 0.44, h * 0.69, w * 0.52, rt); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = c.rim; ctx.lineWidth = h * 0.0035;
+  for (let k = 0; k < 6; k++) {
+    const y = rt + h * (0.03 + k * 0.05), half = w * (0.012 + k * 0.012), x = w * (0.55 + 0.04 * Math.sin(k * 1.3));
+    ctx.globalAlpha = 0.85 - k * 0.1; ctx.beginPath(); ctx.moveTo(x - half, y); ctx.lineTo(x + half, y); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  // Foreground banks.
+  ctx.fillStyle = lin(0, h * 0.73, 0, h, [[0, c.mtnDark], [1, c.groundDeep]]);
+  ctx.beginPath(); ctx.moveTo(0, h * 0.74); ctx.bezierCurveTo(w * 0.16, h * 0.73, w * 0.30, h * 0.79, w * 0.34, h * 0.86);
+  ctx.bezierCurveTo(w * 0.28, h * 0.91, w * 0.18, h * 0.95, w * 0.14, h); ctx.lineTo(0, h); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(w, h * 0.77); ctx.bezierCurveTo(w * 0.86, h * 0.77, w * 0.74, h * 0.82, w * 0.72, h * 0.89);
+  ctx.bezierCurveTo(w * 0.80, h * 0.93, w * 0.86, h * 0.97, w * 0.88, h); ctx.lineTo(w, h); ctx.closePath(); ctx.fill();
+}
+
+/* ---------- The glass shader: LIQUID_AGSL from LiquidGlass.kt, one pass for every pane ---------- */
+const MAXP = 32, MAXT = 8;
+const FS = `#version 300 es
+precision highp float;
+#define MAXP ${MAXP}
+#define MAXT ${MAXT}
+uniform sampler2D uBg;
+uniform sampler2D uFrost;
+uniform vec2 uRes;
+uniform float uPx;
+uniform int uCount;
+uniform vec4 uRect[MAXP];   // x, y, w, h (device px, y down)
+uniform vec4 uP[MAXP];      // corner, bezel, refraction, kind (0 liquid, 1 frost, 2 track)
+uniform vec4 uTint[MAXP];   // rgba wash (track: accent)
+uniform vec4 uX[MAXP];      // ripple, fillX, fillAlpha, opacity
+uniform int uTCount;        // tracks again, so the glass above them can refract them
+uniform vec4 uTRect[MAXT];
+uniform vec4 uTTint[MAXT];
+uniform vec4 uTX[MAXT];
+out vec4 outColor;
+const vec3 SHADE = vec3(0.169, 0.188, 0.271);
+
+float sdRR(vec2 p, vec4 r, float rad, out vec2 q, out vec2 s) {
+  vec2 h = r.zw * 0.5;
+  vec2 c = p - r.xy - h;
+  s = sign(c + vec2(0.0001));
+  q = abs(c) - (h - vec2(rad));
+  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - rad;
+}
+
+vec3 track(vec3 c, vec2 p, vec4 r, vec3 acc, vec4 x) {
+  vec2 q, s;
+  float d = sdRR(p, r, r.w * 0.5, q, s);
+  float a = clamp(0.5 - d, 0.0, 1.0);
+  if (a <= 0.0) return c;
+  float fy = clamp((p.y - r.y) / r.w, 0.0, 1.0);
+  vec3 col = mix(c, SHADE, mix(0.20, 0.08, fy));
+  vec3 fill = mix(mix(acc, vec3(1.0), 0.45), acc, clamp((p.x - r.x) / r.z, 0.0, 1.0));
+  col = mix(col, fill, smoothstep(x.y + uPx, x.y - uPx, p.x) * x.z * 0.9);
+  col += vec3(clamp(1.0 + d / (1.2 * uPx), 0.0, 1.0) * mix(0.45, 0.05, fy));
+  return mix(c, col, a);
+}
+
+vec3 scene(vec2 p) {
+  vec3 c = texture(uBg, clamp(p / uRes, 0.0, 1.0)).rgb;
+  for (int i = 0; i < MAXT; i++) {
+    if (i >= uTCount) break;
+    c = track(c, p, uTRect[i], uTTint[i].rgb, uTX[i]);
+  }
+  return c;
+}
+
+vec3 liquid(vec3 c, vec2 p, int i) {
+  vec4 r = uRect[i];
+  vec4 P = uP[i];
+  float m = min(r.z, r.w) * 0.5;
+  vec2 q, s;
+  float d = sdRR(p, r, min(P.x, m), q, s);
+  float a = clamp(0.5 - d, 0.0, 1.0) * uX[i].w;
+  if (a <= 0.0) return c;
+  // Outward normal from the rounded-rect SDF.
+  float corner = step(0.0, q.x) * step(0.0, q.y);
+  vec2 nc = normalize(max(q, vec2(0.0001))) * s;
+  vec2 ne = mix(vec2(0.0, s.y), vec2(s.x, 0.0), step(q.y, q.x));
+  vec2 n = normalize(mix(ne, nc, corner));
+  // Convex bezel: the backdrop is pulled inward near the edge, untouched in the middle.
+  float t = clamp(-d / max(min(P.y, m), 1.0), 0.0, 1.0);
+  float edge = pow(1.0 - t, 2.2);
+  float pull = P.z * edge;
+  vec2 lp = p - r.xy;
+  vec2 w = vec2(sin(lp.y * 0.021 + 1.7 * sin(lp.x * 0.013)), sin(lp.x * 0.019 + 1.5 * sin(lp.y * 0.011))) * uX[i].x;
+  vec2 base = p - n * pull + w;
+  // ~1.5px blur, dispersion where the glass bends, a little more saturation.
+  float b = 0.6 * uPx;
+  vec3 col = (scene(base) * 2.0 + scene(base + vec2(b, b)) + scene(base + vec2(-b, b))
+    + scene(base + vec2(b, -b)) + scene(base + vec2(-b, -b))) / 6.0;
+  col.r = mix(col.r, scene(base - n * pull * 0.10).r, edge);
+  col.b = mix(col.b, scene(base + n * pull * 0.10).b, edge);
+  col = mix(vec3(dot(col, vec3(0.299, 0.587, 0.114))), col, 1.15);
+  col = mix(col, uTint[i].rgb, uTint[i].a);
+  // Rim specular + crisp inset highlights (2px top-left, 1px bottom-right).
+  float key = max(dot(n, normalize(vec2(-0.6, -0.8))), 0.0);
+  float fill = max(dot(n, normalize(vec2(0.6, 0.8))), 0.0);
+  col += vec3(pow(1.0 - t, 3.0) * (0.30 * key + 0.12 * fill));
+  col += vec3(clamp(1.0 + d / (2.0 * uPx), 0.0, 1.0) * key * 0.6 + clamp(1.0 + d / uPx, 0.0, 1.0) * fill * 0.5);
+  return mix(c, clamp(col, 0.0, 1.0), a);
+}
+
+vec3 frost(vec3 c, vec2 p, int i) {
+  vec4 r = uRect[i];
+  vec2 q, s;
+  float d = sdRR(p, r, min(uP[i].x, min(r.z, r.w) * 0.5), q, s);
+  float a = clamp(0.5 - d, 0.0, 1.0) * uX[i].w;
+  if (a <= 0.0) return c;
+  vec3 col = texture(uFrost, clamp(p / uRes, 0.0, 1.0)).rgb;
+  col = mix(col, uTint[i].rgb, uTint[i].a);
+  float g = fract(sin(dot(floor(p / uPx), vec2(12.9898, 78.233))) * 43758.5453);
+  col += (g - 0.5) * 0.05;
+  return mix(c, col, a);
+}
+
+void main() {
+  vec2 p = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y);
+  vec3 c = texture(uBg, p / uRes).rgb;
+  for (int i = 0; i < MAXP; i++) {
+    if (i >= uCount) break;
+    vec4 r = uRect[i];
+    if (p.x < r.x - 1.0 || p.y < r.y - 1.0 || p.x > r.x + r.z + 1.0 || p.y > r.y + r.w + 1.0) continue;
+    float k = uP[i].w;
+    if (k < 0.5) c = liquid(c, p, i);
+    else if (k < 1.5) c = frost(c, p, i);
+    else c = track(c, p, r, uTint[i].rgb, uX[i]);
+  }
+  outColor = vec4(c, 1.0);
+}`;
+const VS = `#version 300 es
+in vec2 a; void main() { gl_Position = vec4(a, 0.0, 1.0); }`;
+
+/* Per-kind settings, in CSS px — the same numbers the Compose modifiers use. */
+const PRESET = {
+  card:   { kind: 0, bezel: 26, refraction: 30, tint: [1, 1, 1, 0.10], ripple: 1 },
+  button: { kind: 0, bezel: 16, refraction: 20, tint: [1, 1, 1, 0.04], ripple: 2 },
+  knob:   { kind: 0, bezel: 999, refraction: 0, tint: [1, 1, 1, 0.20], ripple: 0 },
+  frost:  { kind: 1, tint: [1, 1, 1, 0.55] },
+  track:  { kind: 2 },
+};
+
+const glCanvas = document.getElementById("gl"), bgCanvas = document.getElementById("bg");
+const gl = glCanvas.getContext("webgl2", { antialias: false, alpha: false, premultipliedAlpha: false });
+let prog, U = {}, texBg, texFrost, glOk = false;
+const DPR = () => Math.min(window.devicePixelRatio || 1, 2);
+const BACKDROP_DOWNSCALE = 1.5, FROST_DOWNSCALE = 24;
+
+function compile(type, src) {
+  const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+function setupGL() {
+  prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, VS));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FS));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  gl.useProgram(prog);
+  const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, "a"); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  for (const n of ["uBg", "uFrost", "uRes", "uPx", "uCount", "uRect", "uP", "uTint", "uX", "uTCount", "uTRect", "uTTint", "uTX"]) U[n] = gl.getUniformLocation(prog, n);
+  const tex = unit => { const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t; };
+  texBg = tex(0); texFrost = tex(1);
+  gl.uniform1i(U.uBg, 0); gl.uniform1i(U.uFrost, 1);
+}
+
+/** Renders the landscape at 1/1.5 into the backdrop, and its 1/24 box-filtered copy (the frost). */
+let bgKey = "";
+function renderBackdrop() {
+  const dpr = DPR(), W = innerWidth, H = innerHeight, key = `${W}x${H}@${dpr}:${theme.accent}`;
+  if (key === bgKey) return; bgKey = key;
+  bgCanvas.width = Math.max(1, Math.round(W * dpr / BACKDROP_DOWNSCALE));
+  bgCanvas.height = Math.max(1, Math.round(H * dpr / BACKDROP_DOWNSCALE));
+  drawDawn(bgCanvas.getContext("2d"), bgCanvas.width, bgCanvas.height, theme);
+  document.body.style.background = theme.skyMid;
+  if (!glOk) return;
+  // Frost: halve repeatedly — a smooth blur once upsampled bilinearly.
+  let src = bgCanvas, scale = BACKDROP_DOWNSCALE;
+  while (scale * 2 <= FROST_DOWNSCALE && src.width > 2 && src.height > 2) {
+    const c = document.createElement("canvas"); c.width = src.width >> 1; c.height = src.height >> 1;
+    const x = c.getContext("2d"); x.imageSmoothingQuality = "high"; x.drawImage(src, 0, 0, c.width, c.height);
+    src = c; scale *= 2;
+  }
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texBg);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bgCanvas);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, texFrost);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
+}
+
+/* ---------- Springs (Compose's spring(dampingRatio, stiffness)) ---------- */
+function spring(x, damping, stiffness) { return { x, v: 0, t: x, z: damping, k: stiffness }; }
+function step(s, dt) {
+  const a = s.k * (s.t - s.x) - 2 * s.z * Math.sqrt(s.k) * s.v;
+  s.v += a * dt; s.x += s.v * dt;
+  if (Math.abs(s.t - s.x) < 1e-4 && Math.abs(s.v) < 1e-3) { s.x = s.t; s.v = 0; }
+}
+
+/* Buttons: squash like a drop, light pools under the finger, the lens bulges — then spring back. */
+const buttons = [...document.querySelectorAll(".btn")];
+for (const b of buttons) {
+  b._s = spring(0, 0.42, 400);
+  b.addEventListener("pointerdown", e => {
+    if (b.disabled) return;
+    const r = b.getBoundingClientRect();
+    b.style.setProperty("--x", `${e.clientX - r.left}px`); b.style.setProperty("--y", `${e.clientY - r.top}px`);
+    b._s.t = 1;
+  });
+  for (const ev of ["pointerup", "pointerleave", "pointercancel"]) b.addEventListener(ev, () => { b._s.t = 0; });
+  b.addEventListener("keydown", e => { if (e.key === " " || e.key === "Enter") b._s.t = 1; });
+  b.addEventListener("keyup", () => { b._s.t = 0; });
+}
+
+/* Stepper. */
+let stepValue = 3;
+document.querySelectorAll("[data-step]").forEach(b => b.addEventListener("click", () => {
+  stepValue = Math.max(1, Math.min(9, stepValue + Number(b.dataset.step)));
+  document.getElementById("stepOut").textContent = stepValue;
+}));
+
+/* Switches: a liquid knob that springs across and stretches with its own speed. */
+const switches = [...document.querySelectorAll(".switch")];
+for (const sw of switches) {
+  const on = sw.getAttribute("aria-checked") === "true";
+  sw._s = spring(on ? 1 : 0, 0.55, 380); sw._press = spring(0, 0.5, 500);
+  sw.addEventListener("click", () => {
+    const next = sw.getAttribute("aria-checked") !== "true";
+    sw.setAttribute("aria-checked", String(next)); sw._s.t = next ? 1 : 0;
+  });
+  sw.addEventListener("pointerdown", () => { sw._press.t = 1; });
+  for (const ev of ["pointerup", "pointerleave", "pointercancel"]) sw.addEventListener(ev, () => { sw._press.t = 0; });
+}
+
+/* Slider. */
+const slider = document.querySelector(".slider");
+slider._s = spring(Number(slider.dataset.value) / 100, 0.85, 800);
+slider._drag = false;
+slider._g = spring(0, 0.5, 500);
+function setSlider(v) {
+  v = Math.max(0, Math.min(100, Math.round(v)));
+  slider.dataset.value = v; slider.setAttribute("aria-valuenow", v); slider._s.t = v / 100;
+  document.getElementById("sliderOut").textContent = `${v}%`;
+}
+function sliderFromEvent(e) { const r = slider.getBoundingClientRect(); setSlider((e.clientX - r.left) / r.width * 100); }
+slider.addEventListener("pointerdown", e => { slider.setPointerCapture(e.pointerId); slider._drag = true; sliderFromEvent(e); });
+slider.addEventListener("pointermove", e => { if (slider._drag) sliderFromEvent(e); });
+for (const ev of ["pointerup", "pointercancel"]) slider.addEventListener(ev, () => { slider._drag = false; });
+slider.addEventListener("keydown", e => {
+  const d = { ArrowRight: 5, ArrowUp: 5, ArrowLeft: -5, ArrowDown: -5 }[e.key];
+  if (d) { e.preventDefault(); setSlider(Number(slider.dataset.value) + d); }
+});
+
+/* Theme chips: the background and accent convert to the theme. */
+document.querySelectorAll("[data-theme]").forEach(b => b.addEventListener("click", () => {
+  theme = THEMES[b.dataset.theme];
+  document.querySelectorAll("[data-theme]").forEach(x => x.classList.toggle("primary", x === b));
+  const root = document.documentElement.style;
+  root.setProperty("--accent", theme.accent); root.setProperty("--accent-light", theme.accentLight);
+  root.setProperty("--ink", theme.ink); root.setProperty("--ink-soft", rgba(theme.ink, 0.66));
+  renderBackdrop();
+}));
+document.querySelectorAll('nav [role="tab"]').forEach(t => t.addEventListener("click", () => {
+  document.querySelectorAll('nav [role="tab"]').forEach(x => x.setAttribute("aria-selected", String(x === t)));
+}));
+
+/* ---------- Frame: advance springs, lay out knobs, upload pane rects, draw ---------- */
+const rect = new Float32Array(MAXP * 4), par = new Float32Array(MAXP * 4), tint = new Float32Array(MAXP * 4), ext = new Float32Array(MAXP * 4);
+const trect = new Float32Array(MAXT * 4), ttint = new Float32Array(MAXT * 4), text = new Float32Array(MAXT * 4);
+let last = performance.now();
+
+function animate(dt) {
+  for (const b of buttons) { step(b._s, dt); b.style.setProperty("--p", Math.max(0, b._s.x).toFixed(3)); }
+  for (const sw of switches) {
+    step(sw._s, dt); step(sw._press, dt);
+    const knob = sw.querySelector(".knob"), travel = sw.clientWidth - knob.offsetWidth;
+    const stretch = Math.min(Math.abs(sw._s.v) * 0.06, 0.32), grow = 1 + 0.12 * sw._press.x;
+    knob.style.transform = `translateX(${sw._s.x * travel}px) scale(${grow * (1 + stretch)}, ${grow / (1 + stretch)})`;
+  }
+  step(slider._s, dt); slider._g.t = slider._drag ? 1 : 0; step(slider._g, dt);
+  const knob = slider.querySelector(".knob"), g = 1 + 0.18 * slider._g.x, st = 1 + 0.12 * slider._g.x;
+  knob.style.transform = `translateX(${slider._s.x * (slider.clientWidth - knob.offsetWidth)}px) scale(${g * st}, ${g / st})`;
+}
+
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 1 / 30); last = now;
+  animate(dt);
+  renderBackdrop();
+  if (!glOk) return requestAnimationFrame(frame);
+  const dpr = DPR(), W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
+  if (glCanvas.width !== W || glCanvas.height !== H) { glCanvas.width = W; glCanvas.height = H; }
+  const accent = hex(theme.accent).map(v => v / 255);
+  let n = 0, tn = 0;
+  for (const el of document.querySelectorAll("[data-glass]")) {
+    if (n >= MAXP) break;
+    const b = el.getBoundingClientRect();
+    if (b.width === 0 || b.bottom < -40 || b.top > innerHeight + 40) continue;
+    const kindName = el.dataset.glass, pr = PRESET[kindName], o = n * 4;
+    rect.set([b.left * dpr, b.top * dpr, b.width * dpr, b.height * dpr], o);
+    const corner = (parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0) * dpr;
+    const press = el._s ? Math.max(0, el._s.x) : 0;
+    let refraction = (pr.refraction || 0) * dpr * (1 + 0.6 * press);
+    if (kindName === "knob") refraction = Math.min(b.width, b.height) * dpr * 0.28; // the lens: magnifies what's under it
+    par.set([corner, (pr.bezel || 0) * dpr, refraction, pr.kind], o);
+    let t = pr.tint || [0, 0, 0, 0];
+    if (kindName === "button" && el.classList.contains("primary")) t = [...accent, 0.16];
+    if (kindName === "track") t = [...accent, 1];
+    tint.set(t, o);
+    let fillX = 0, fillA = 0;
+    if (kindName === "track") {
+      const parent = el.parentElement, k = parent.querySelector(".knob").getBoundingClientRect();
+      if (parent.classList.contains("slider")) { fillX = (k.left + k.width / 2) * dpr; fillA = 1; }
+      else { fillX = b.right * dpr + 2; fillA = Math.max(0, Math.min(1, parent._s.x)); }
+      if (tn < MAXT) { trect.set(rect.subarray(o, o + 4), tn * 4); ttint.set(t, tn * 4); text.set([0, fillX, fillA, 1], tn * 4); tn++; }
+    }
+    ext.set([(pr.ripple || 0) * dpr, fillX, fillA, el.disabled ? 0.45 : 1], o);
+    n++;
+  }
+  gl.viewport(0, 0, W, H);
+  gl.uniform2f(U.uRes, W, H); gl.uniform1f(U.uPx, dpr);
+  gl.uniform1i(U.uCount, n); gl.uniform4fv(U.uRect, rect); gl.uniform4fv(U.uP, par); gl.uniform4fv(U.uTint, tint); gl.uniform4fv(U.uX, ext);
+  gl.uniform1i(U.uTCount, tn); gl.uniform4fv(U.uTRect, trect); gl.uniform4fv(U.uTTint, ttint); gl.uniform4fv(U.uTX, text);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+
+try { if (!gl) throw new Error("no webgl2"); setupGL(); glOk = true; }
+catch (e) { console.warn("Liquid glass falls back to CSS backdrop-filter:", e); document.documentElement.classList.add("no-gl"); }
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
